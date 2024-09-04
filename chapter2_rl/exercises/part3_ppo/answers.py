@@ -553,8 +553,9 @@ class PPOTrainer:
             for info in infos:
                 if 'episode' in info:
                     last_episode_len = info['episode']['l']
+                    last_episode_return = info['episode']['r']
                     if self.args.use_wandb:
-                        wandb.log({'last_episode_len': last_episode_len}, step=self.agent.step)
+                        wandb.log({'last_episode_len': last_episode_len, 'last_episode_return': last_episode_return}, step=self.agent.step)
 
         return last_episode_len
 
@@ -669,6 +670,84 @@ for probe_idx in range(1, 6):
     test_probe(probe_idx)
 # %%
 args = PPOArgs(use_wandb=True)
+trainer = PPOTrainer(args)
+trainer.train()
+# %%
+from gym.envs.classic_control.cartpole import CartPoleEnv
+
+class EasyCart(CartPoleEnv):
+    def step(self, action):
+        (obs, reward, done, info) = super().step(action)
+        x, v, theta, omega = obs
+        new_reward = 0.5 * (1 - abs(x / self.x_threshold)) + 0.5 * (1 - abs(theta / self.theta_threshold_radians))
+        return obs, new_reward, done, info
+
+gym.envs.registration.register(id="EasyCart-v0", entry_point=EasyCart, max_episode_steps=500)
+args = PPOArgs(env_id="EasyCart-v0", use_wandb=True)
+trainer = PPOTrainer(args)
+trainer.train()
+# %%
+class SpinCart(CartPoleEnv):
+    def step(self, action):
+        obs, reward, done, info = super().step(action)
+        x, v, theta, omega = obs
+        new_reward = abs(omega) + (1 - abs(x / self.x_threshold))
+        new_done = (abs(x) > self.x_threshold)
+
+        return obs, new_reward, new_done, info
+
+
+gym.envs.registration.register(id="SpinCart-v0", entry_point=SpinCart, max_episode_steps=500)
+args = PPOArgs(env_id="SpinCart-v0", use_wandb=True)
+trainer = PPOTrainer(args)
+trainer.train()
+# %%
+%pip install autorom[accept-rom-license]
+%pip install ale-py
+# %%
+env = gym.make("ALE/Breakout-v5")
+print(env.action_space)
+print(env.observation_space.shape)
+# %%
+def get_actor_and_critic_atari(obs_shape: Tuple, num_actions: int):
+    '''
+    Returns (actor, critic) in the "atari" case, according to diagram above.
+    '''
+    assert (len(obs_shape) == 3) and (obs_shape[1] == obs_shape[2]) and ((obs_shape[1] - 4) % 8 == 0), "invalid obs_shape"
+    L = obs_shape[1]
+    shared = nn.Sequential(
+        nn.Conv2d(in_channels=4, out_channels=32, kernel_size=8, padding=0, stride=4),
+        nn.ReLU(),
+        nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, padding=0, stride=2),
+        nn.ReLU(),
+        nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, padding=0, stride=1),
+        nn.Flatten(),
+        nn.Linear(((L - 4) // 8 - 3) ** 2 * 64, 512),
+        nn.ReLU(),
+    )
+
+    actor = nn.Sequential(
+        shared,
+        layer_init(nn.Linear(512, num_actions), std=0.01)
+    )
+
+    critic = nn.Sequential(
+        shared,
+        layer_init(nn.Linear(512, 1), std=1)
+    )
+
+    return (actor, critic)
+
+tests.test_get_actor_and_critic(get_actor_and_critic, mode="atari")
+# %%
+args = PPOArgs(
+    env_id = "ALE/Breakout-v5",
+    wandb_project_name = "PPOAtari",
+    use_wandb = True,
+    mode = "atari",
+    clip_coef = 0.1,
+    num_envs = 8,
+)
 trainer = PPOTrainer(args)
 trainer.train()
 # %%
